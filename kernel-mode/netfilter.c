@@ -12,6 +12,8 @@
 #error "unsupported kernel version"
 #endif
 
+#define LOG(format, ...) printk(KERN_INFO "[NFTI] " format "\n", ##__VA_ARGS__)
+
 
 MODULE_LICENSE("license");
 MODULE_AUTHOR("me");
@@ -32,7 +34,7 @@ static unsigned int nf_callback_out(
 
     tcpHeader = (struct tcphdr*) skb_transport_header(skb);
     if (tcpHeader->syn != 0) {
-        printk(KERN_INFO "syn on tcp pid[%d] name[%s]\n", current->pid, current->comm);
+        LOG("syn on tcp pid[%d] name[%s]", current->pid, current->comm);
     }
 
     return NF_ACCEPT;
@@ -52,7 +54,7 @@ static int __init nf_init(void)
 {
     int ret;
 
-    printk(KERN_INFO "initializing net filter module\n");
+    LOG("initializing net filter module");
 
     memset(nf_hooks, 0, sizeof(nf_hooks));
 
@@ -70,7 +72,7 @@ static int __init nf_init(void)
 
     ret = nf_register_net_hook(&init_net, &nf_hooks[0]);
     if (ret < 0) {
-        printk(KERN_INFO "nf_register_net_hook (in) failed [%d]\n", ret);
+        LOG("nf_register_net_hook (in) failed [%d]", ret);
         return ret;
     }
 
@@ -78,22 +80,22 @@ static int __init nf_init(void)
     if (ret < 0) {
         nf_unregister_net_hook(&init_net, &nf_hooks[0]);
 
-        printk(KERN_INFO "nf_register_net_hook (out) failed [%d]\n", ret);
+        LOG("nf_register_net_hook (out) failed [%d]", ret);
         return ret;
     }
 
-    printk(KERN_INFO "initialized successfully\n");
+    LOG("initialized successfully");
     return 0;
 }
 
 static void __exit nf_exit(void)
 {
-    printk(KERN_INFO "uninitializing net filter module\n");
+    LOG("uninitializing net filter module");
 
     nf_unregister_net_hook(&init_net, &nf_hooks[0]);
     nf_unregister_net_hook(&init_net, &nf_hooks[1]);
 
-    printk(KERN_INFO "uninitialized net filter module\n");
+    LOG("uninitialized net filter module");
 }
 
 module_init(nf_init);
