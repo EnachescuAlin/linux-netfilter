@@ -1,0 +1,8 @@
+#ifndef NETFILTER_ERRORS
+#define NETFILTER_ERRORS
+
+#define NETFILTER_NO_ERROR              0
+#define NETFILTER_ERROR_OUT_OF_MEMORY   1
+#define NETFILTER_ERROR_NULL_POINTER    2
+
+#endif

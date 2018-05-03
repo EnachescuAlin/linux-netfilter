@@ -17,8 +17,7 @@
 // my headers
 #include "include/shared_structs.h"
 #include "private_include/log.h"
-#include "private_include/structs.h"
-#include "private_include/tcp_conn_macro_utils.h"
+#include "private_include/tcp_conn.h"
 
 // check linux version...
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
@@ -33,13 +32,6 @@ MODULE_DESCRIPTION("traffic inspection");
 #define MAX_NUM_TCP_CONNS 65536
 static struct TcpConnection* tcpConnections[MAX_NUM_TCP_CONNS];
 
-static void freeTcpConnection(__u16 localPort)
-{
-    // TODO: drop packets
-    kfree(tcpConnections[localPort]);
-    tcpConnections[localPort] = NULL;
-}
-
 static unsigned int nf_callback_out(
     void *priv,
     struct sk_buff *skb,
@@ -49,11 +41,14 @@ static unsigned int nf_callback_out(
     struct tcphdr *tcpHeader;
     __u16 localPort;
     struct TcpConnection *conn = NULL;
+    int err;
 
     ipHeader = (struct iphdr*) skb_network_header(skb);
     if (ipHeader->protocol != IPPROTO_TCP) {
         return NF_ACCEPT;
     }
+
+    // TODO if no one is connected to driver then accept all packets
 
     tcpHeader = (struct tcphdr*) skb_transport_header(skb);
     localPort = ntohs(tcpHeader->source);
@@ -69,11 +64,25 @@ static unsigned int nf_callback_out(
             // drop current tcp connection
             LOG("info, we received out syn and tcp connection is not null" LOG_TCP_CONNECTION_FORMAT ", localPort[%hu]",
                 LOG_TCP_CONNECTION(localPort), localPort);
-            freeTcpConnection(localPort);
+
+            TcpConnection_uninit(tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
         }
 
-        tcpConnections[localPort] = (struct TcpConnection*) kmalloc(sizeof(struct TcpConnection), GFP_ATOMIC);
-        memset(tcpConnections[localPort], 0, sizeof(struct TcpConnection));
+        err = TcpConnection_alloc(&tcpConnections[localPort]);
+        if (err != NETFILTER_NO_ERROR) {
+            DLOG("error, TcpConnection_alloc failed [%d]", err);
+            return NF_ACCEPT;
+        }
+
+        err = TcpConnection_init(tcpConnections[localPort]);
+        if (err != NETFILTER_NO_ERROR) {
+            DLOG("error, TcpConnection_init failed [%d]", err);
+
+            TcpConnection_free(&tcpConnections[localPort]);
+
+            return NF_ACCEPT;
+        }
 
         conn = tcpConnections[localPort];
 
@@ -88,16 +97,49 @@ static unsigned int nf_callback_out(
 
         conn->outSyn = 1;
 
+        // TODO send event to um
+
         return NF_ACCEPT;
     } else if (tcpHeader->rst != 0) {
         // if we receive rst then drop the connection
         if (tcpConnections[localPort] != NULL) {
             LOG("info, out rst => drop connection localPort[%hu]", localPort);
-            freeTcpConnection(localPort);
+
+            // TODO send event to um and wait for all packets from um to be reinjected
+
+            TcpConnection_uninit(&tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
         } else {
-            DLOG("warning, receive out rst and conn is null localPort[%hu]", localPort);
+            DLOG("warning, received out rst and conn is null localPort[%hu]", localPort);
         }
+
+        return NF_ACCEPT;
     } else if (tcpHeader->fin != 0) {
+        // accept packet if we do not filter the connection
+        if (tcpConnections[localPort] == NULL) {
+            DLOG("warning, received out fin and conn is null localPort[%hu]", localPort);
+            return NF_ACCEPT;
+        }
+
+        // drop packet if already received out fin
+        if (tcpConnections[localPort]->outFin == 1) {
+            DLOG("warning, received out fin and outFin field is already set localPort[%hu]", localPort);
+            return NF_DROP;
+        }
+
+        LOG("info, received out fin localPort[%hu]", localPort);
+
+        tcpConnections[localPort]->outFin = 1;
+
+        // TODO we should send event to um and wait for all packets from um
+        // and after the all packets are reinjected destroy the conn
+        if (tcpConnections[localPort]->inFin == 1) {
+            LOG("info, inFin is set => connection destroyed localPort[%hu]", localPort);
+            TcpConnection_uninit(tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
+        }
+
+        return NF_ACCEPT;
     }
 
     // data
@@ -119,6 +161,8 @@ static unsigned int nf_callback_in(
         return NF_ACCEPT;
     }
 
+    // TODO if no one is connected to driver then accept all packets
+
     tcpHeader = (struct tcphdr*) skb_transport_header(skb);
     localPort = ntohs(tcpHeader->dest);
 
@@ -132,11 +176,49 @@ static unsigned int nf_callback_in(
 
         DLOG("info, connection established localPort[%hu]", localPort);
 
-        // send to user mode that a connection was established
+        // TODO send to user mode that a connection was established
 
         return NF_ACCEPT;
     } else if (tcpHeader->rst != 0) {
+        // if we receive rst then drop the connection
+        if (tcpConnections[localPort] != NULL) {
+            LOG("info, in rst => drop connection localPort[%hu]", localPort);
+
+            // TODO send event to um and wait for all packets from um to be reinjected
+
+            TcpConnection_uninit(&tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
+        } else {
+            DLOG("warning, received in rst and conn is null localPort[%hu]", localPort);
+        }
+
+        return NF_ACCEPT;
     } else if (tcpHeader->fin != 0) {
+        // accept packet if we do not filter the connection
+        if (tcpConnections[localPort] == NULL) {
+            DLOG("warning, received in fin and conn is null localPort[%hu]", localPort);
+            return NF_ACCEPT;
+        }
+
+        // drop packet if already received in fin
+        if (tcpConnections[localPort]->inFin == 1) {
+            DLOG("warning, received in fin and inFin field is already set localPort[%hu]", localPort);
+            return NF_DROP;
+        }
+
+        LOG("info, received in fin localPort[%hu]", localPort);
+
+        tcpConnections[localPort]->inFin = 1;
+
+        // TODO we should send event to um and wait for all packets from um
+        // and after the all packets are reinjected destroy the conn
+        if (tcpConnections[localPort]->outFin == 1) {
+            LOG("info, outFin is set => connection destroyed localPort[%hu]", localPort);
+            TcpConnection_uninit(tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
+        }
+
+        return NF_ACCEPT;
     }
 
     // data
@@ -151,6 +233,7 @@ static int __init nf_init(void)
     int ret;
 
     LOG("initializing net filter module");
+    printk(KERN_INFO "[NFTI] [ ana are mere ]\n")
 
     memset(tcpConnections, 0, sizeof(tcpConnections));
 
@@ -198,7 +281,8 @@ static void __exit nf_exit(void)
     // todo free memory
     for (i = 0; i < MAX_NUM_TCP_CONNS; i++) {
         if (tcpConnections[i] != NULL) {
-            kfree(tcpConnections[i]);
+            TcpConnection_uninit(&tcpConnections[localPort]);
+            TcpConnection_free(&tcpConnections[localPort]);
         }
     }
 
