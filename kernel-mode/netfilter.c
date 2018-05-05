@@ -107,7 +107,7 @@ static unsigned int nf_callback_out(
 
             // TODO send event to um and wait for all packets from um to be reinjected
 
-            TcpConnection_uninit(&tcpConnections[localPort]);
+            TcpConnection_uninit(tcpConnections[localPort]);
             TcpConnection_free(&tcpConnections[localPort]);
         } else {
             DLOG("warning, received out rst and conn is null localPort[%hu]", localPort);
@@ -186,7 +186,7 @@ static unsigned int nf_callback_in(
 
             // TODO send event to um and wait for all packets from um to be reinjected
 
-            TcpConnection_uninit(&tcpConnections[localPort]);
+            TcpConnection_uninit(tcpConnections[localPort]);
             TcpConnection_free(&tcpConnections[localPort]);
         } else {
             DLOG("warning, received in rst and conn is null localPort[%hu]", localPort);
@@ -233,7 +233,6 @@ static int __init nf_init(void)
     int ret;
 
     LOG("initializing net filter module");
-    printk(KERN_INFO "[NFTI] [ ana are mere ]\n")
 
     memset(tcpConnections, 0, sizeof(tcpConnections));
 
@@ -266,6 +265,7 @@ static int __init nf_init(void)
     }
 
     LOG("initialized successfully");
+
     return 0;
 }
 
@@ -278,11 +278,10 @@ static void __exit nf_exit(void)
     nf_unregister_net_hook(&init_net, &nf_hooks[0]);
     nf_unregister_net_hook(&init_net, &nf_hooks[1]);
 
-    // todo free memory
     for (i = 0; i < MAX_NUM_TCP_CONNS; i++) {
         if (tcpConnections[i] != NULL) {
-            TcpConnection_uninit(&tcpConnections[localPort]);
-            TcpConnection_free(&tcpConnections[localPort]);
+            TcpConnection_uninit(tcpConnections[i]);
+            TcpConnection_free(&tcpConnections[i]);
         }
     }
 
